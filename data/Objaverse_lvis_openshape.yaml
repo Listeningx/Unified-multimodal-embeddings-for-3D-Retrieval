@@ -1,3 +1,3 @@
 NAME: Objaverse_lvis_openshape
-PC_PATH: ./data/test_datasets/objaverse_lvis/lvis_testset.txt
-PC_PATH_ROOT: ./data/test_datasets/objaverse_lvis
+PC_PATH: ./data/test_datasets/lvis/lvis_test.txt
+PC_PATH_ROOT: /cfs_160T/serenasnliu/3d-datasets/openshape/Objaverse/000-081.tar/objaverse-processed/merged_for_training_final/Objaverse/

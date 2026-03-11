@@ -296,6 +296,11 @@ def parse_args(args):
 
     if args.enable_deepspeed:
         try:
+            # 在导入 deepspeed 之前设置环境变量，禁用 FusedAdam/FusedLAMB
+            # 这样即使没有安装 apex，也不会报错
+            os.environ['DS_BUILD_FUSED_ADAM'] = '0'
+            os.environ['DS_BUILD_FUSED_LAMB'] = '0'
+            
             import deepspeed
             from deepspeed import DeepSpeedConfig
             os.environ['ENV_TYPE'] = "deepspeed"

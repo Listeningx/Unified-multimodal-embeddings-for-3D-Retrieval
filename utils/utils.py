@@ -40,8 +40,25 @@ def cfg_from_yaml_file(cfg_file):
     return config
 
 def get_model(model):
+    """
+    获取底层模型（去除 DDP/DeepSpeed 包装）
+    
+    支持：
+    - torch.nn.DataParallel
+    - torch.nn.parallel.DistributedDataParallel
+    - DeepSpeed 包装
+    
+    Args:
+        model: 可能被包装的模型
+    
+    Returns:
+        底层模型
+    """
     if isinstance(model, torch.nn.DataParallel) \
       or isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        return model.module
+    # DeepSpeed 包装
+    elif hasattr(model, 'module'):
         return model.module
     else:
         return model

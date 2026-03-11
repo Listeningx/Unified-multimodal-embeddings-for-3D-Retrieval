@@ -1,0 +1,46 @@
+# 数据集类名 - 必须与 datasets.py 中 @DATASETS.register_module() 注册的类名一致
+NAME: Ensembled_embedding
+
+# ================== 点云配置 ==================
+# 点云索引文件路径 (JSON格式: {model_id: relative_path})
+# 当 use_lvis=False 时使用此路径
+PC_PATH: ./data/train_no_lvis_uni3d.json
+# PC_PATH: ./data/train_no_lvis_uni3d_mini.json
+
+
+# LVIS 点云索引文件路径 (JSON格式: {model_id: relative_path})
+# 当 use_lvis=True 时使用此路径
+# PC_PATH_LIVS: ./data/train_all_10w.json
+PC_PATH_LIVS: ./data/train_all_uni3d.json
+
+
+# 点云 .npy 文件的根目录
+# 实际点云路径 = PC_PATH_ROOT + pc_index[model_id]
+# 如果 USE_ABSOLUTE_PATH 为 true，则此配置项不生效
+PC_PATH_ROOT: ""
+
+# 数据路径是否为绝对路径
+# 如果为 true，则 JSON 文件中的 data_path 直接作为完整路径使用，不与 PC_PATH_ROOT 拼接
+USE_ABSOLUTE_PATH: true
+
+# ================== 图像配置 ==================
+# 新格式：图像特征在点云npy文件中
+IMAGE_IN_PC_FILE: true
+
+# 图像特征在npy字典中的字段名
+IMAGE_FEAT_KEY: image_feat
+
+# 渲染视角数量
+NUM_VIEWS: 12
+
+# ================== 旧格式图像配置（IMAGE_IN_PC_FILE: false 时使用）==================
+# 图像嵌入索引文件路径 (JSON格式: {model_id: [view_0_path, view_1_path, ..., view_9_path]})
+# IMAGE_PATH: ./data/train_data/image_index.json
+
+# 图像嵌入 .npy 文件的根目录
+# IMAGE_PATH_ROOT: ./data/train_data/image_embeddings/
+
+# ================== 文本过滤配置（可选）==================
+# GPT-4 文本质量过滤文件路径 (JSON格式: {model_id: {flag: "Y"/"N"}})
+# 如果不需要文本过滤，可以注释掉或删除此行
+GPT_FILTER: ./data/gpt4_filter.json

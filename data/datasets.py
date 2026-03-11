@@ -271,18 +271,30 @@ class Ensembled_embedding(data.Dataset):
         self.npoints = config.npoints
         self.tokenizer = config.tokenizer
         self.train_transform = config.train_transform
-        self.picked_rotation_degrees = list(range(10))
+        self.picked_rotation_degrees = list(range(12))  # 支持12个视角
         self.use_lvis = config.use_lvis
         self.text_source = ["text", "caption", "retrieval_text"] 
-        self.image_root = config.IMAGE_PATH_ROOT
         self.pc_root = config.PC_PATH_ROOT
+        
+        # 图像特征是否在点云文件中（新格式）
+        self.image_in_pc_file = getattr(config, 'IMAGE_IN_PC_FILE', False)
+        self.image_feat_key = getattr(config, 'IMAGE_FEAT_KEY', 'image_feat')  # 图像特征字段名
+        self.num_views = getattr(config, 'NUM_VIEWS', 12)  # 视角数量
+        
+        # 数据路径是否为绝对路径（不需要和 pc_root 拼接）
+        self.use_absolute_path = getattr(config, 'USE_ABSOLUTE_PATH', False)
+        
+        # 如果图像不在点云文件中，则使用传统方式加载
+        if not self.image_in_pc_file:
+            self.image_root = config.IMAGE_PATH_ROOT
+            image_data_ours_p = config.IMAGE_PATH
+            with open(image_data_ours_p, 'r') as f:
+                self.image_data_ours = json.load(f)
+        else:
+            self.image_root = None
+            self.image_data_ours = None
 
         self.rgb_random_drop_prob = 0.5
-        
-        #self.image_data_ours = {}
-        image_data_ours_p = config.IMAGE_PATH
-        with open(image_data_ours_p, 'r') as f:
-            self.image_data_ours = json.load(f)
             
         if self.use_lvis:
             logging.info("Using LVIS")
@@ -293,8 +305,14 @@ class Ensembled_embedding(data.Dataset):
         with open(self.data_list_file_openshape, 'r') as f:
             self.data_list_openshape = json.load(f)
 
-        self.gpt4_filtering = json.load(open(config.GPT_FILTER, "r"))
-        self.use_text_filtering = True
+        # GPT过滤文件（可选）
+        gpt_filter_path = getattr(config, 'GPT_FILTER', None)
+        if gpt_filter_path and os.path.exists(gpt_filter_path):
+            self.gpt4_filtering = json.load(open(gpt_filter_path, "r"))
+            self.use_text_filtering = True
+        else:
+            self.gpt4_filtering = {}
+            self.use_text_filtering = False
 
         self.sample_points_num = self.npoints
         self.whole = config.get('whole')    # use both train and test data for pretraining
@@ -332,6 +350,12 @@ class Ensembled_embedding(data.Dataset):
         normalized_array = random_array / normalized_array
         return normalized_array
     
+    def generate_random_image_feat(self, embedding_dim=1024):
+        """生成随机图像特征向量（用于缺失图像特征的情况）"""
+        random_array = np.random.random(embedding_dim)
+        normalized_array = random_array / np.linalg.norm(random_array)
+        return normalized_array
+    
     def pc_norm(self, pc):
         """ pc: NxC, return NxC """
         centroid = np.mean(pc, axis=0)
@@ -351,22 +375,54 @@ class Ensembled_embedding(data.Dataset):
         return pc
 
     def __getitem__(self, idx):
+        """加载单个样本，支持数据损坏时自动加载下一条"""
+        max_attempts = 10  # 最多尝试加载 10 条不同的数据
+        original_idx = idx
+        
+        for attempt in range(max_attempts):
+            try:
+                return self._load_sample(idx)
+            except Exception as e:
+                print(f"[WARNING] Failed to load sample {idx}: {str(e)}. Trying next sample (attempt {attempt + 1}/{max_attempts})...")
+                # 尝试加载下一条数据，循环到数据集开头
+                idx = (idx + 1) % len(self.file_list)
+                # 如果绕回原点，说明尝试了很多次都失败
+                if idx == original_idx:
+                    break
+        
+        # 如果所有尝试都失败，返回 None（极端情况）
+        print(f"[ERROR] Failed to load any valid sample after {max_attempts} attempts starting from index {original_idx}")
+        return None
+    
+    def _load_sample(self, idx):
+        """实际加载样本的内部方法"""
         sample = self.file_list[idx]
 
         name, data_path = sample['model_id'], sample['data_path']
-        openshape_path = self.pc_root + data_path
-        while True:
+        # 根据配置决定是否拼接根目录
+        if self.use_absolute_path:
+            openshape_path = data_path  # 直接使用绝对路径
+        else:
+            openshape_path = self.pc_root + data_path  # 拼接根目录
+        
+        max_retries = 3  # 最大重试次数
+        for retry in range(max_retries):
             try:
                 openshape_data = np.load(openshape_path, allow_pickle=True).item()
                 data = openshape_data['xyz'].astype(np.float32)
                 rgb = openshape_data['rgb'].astype(np.float32)
-            except OSError as e:
-                print(f"Catched exception: {str(e)}. Re-trying…")
-                import time
-                # time.sleep(1)
-                time.sleep(0.2)
-            else:
                 break
+            except (OSError, IOError) as e:
+                # 临时性错误（如网络文件系统抖动），进行重试
+                if retry < max_retries - 1:
+                    print(f"Catched exception: {str(e)}. Re-trying ({retry + 1}/{max_retries})...")
+                    import time
+                    time.sleep(0.2)
+                else:
+                    raise RuntimeError(f"Failed to load {openshape_path} after {max_retries} retries: {e}")
+            except Exception as e:
+                # 永久性错误（如 pickle 损坏、数据格式错误），直接跳过不重试
+                raise RuntimeError(f"Corrupted data file {openshape_path}: {e}")
 
         data = self.pc_norm(data)
 
@@ -391,36 +447,49 @@ class Ensembled_embedding(data.Dataset):
             if '-Objaverse' in data_path:
                 if not (self.use_text_filtering and self.gpt4_filtering[name]["flag"] == "N"):
                     try:
-                        data_text = openshape_data["text"][0]
+                        data_text = openshape_data["text_feat"][0]
                         if(not isinstance(data_text,str)):
-                            texts.append(data_text)
+                            if np.random.rand() < 0.5:
+                                texts.append(data_text['original'])
+                            else:
+                                texts.append(data_text['prompt_avg'])
                     except:
                         texts.append(self.default_text)
 
             else:
-                idx = np.random.randint(len(openshape_data["text"]))
+                idx = np.random.randint(len(openshape_data["text_feat"]))
                 try:
-                    data_text = openshape_data["text"][idx]
+                    data_text = openshape_data["text_feat"][idx]
                     if(not isinstance(data_text,str)):
-                        texts.append(data_text)
+                        if np.random.rand() < 0.5:
+                            texts.append(data_text['original'])
+                        else:
+                            texts.append(data_text['prompt_avg'])
                 except:
                     texts.append(self.default_text)
         
         if 'caption' in self.text_source:
             if np.random.rand() < 0.5:
-                if len(openshape_data["blip_caption"]) > 0:
+                if len(openshape_data["blip_caption_feat"]) > 0:
                     try:
-                        data_text = openshape_data["blip_caption;"]
+                        data_text = openshape_data["blip_caption_feat"]
                         if(not isinstance(data_text,str)):
-                            texts.append(data_text)
+                            if np.random.rand() < 0.5:
+                                texts.append(data_text['original'])
+                            else:
+                                texts.append(data_text['prompt_avg'])
+                            
                     except:
                         texts.append(self.default_text)
             else:
-                if len(openshape_data["msft_caption"]) > 0:
+                if len(openshape_data["msft_caption_feat"]) > 0:
                     try:
-                        data_text = openshape_data["msft_caption;"]
+                        data_text = openshape_data["msft_caption_feat"]
                         if(not isinstance(data_text,str)):
-                            texts.append(data_text)
+                            if np.random.rand() < 0.5:
+                                texts.append(data_text['original'])
+                            else:
+                                texts.append(data_text['prompt_avg'])
                     except:
                         texts.append(self.default_text)
         
@@ -428,9 +497,10 @@ class Ensembled_embedding(data.Dataset):
             if len(openshape_data["retrieval_text"]) > 0:
                 idx = np.random.randint(len(openshape_data["retrieval_text"]))
                 try:
-                    data_text = openshape_data["retrieval_text"][idx]
+                    data_text = openshape_data["retrieval_text_feat"][idx]
                     if(not isinstance(data_text,str)):
-                        texts.append(data_text)
+                        texts.append(data_text['original'])
+
                 except:
                     texts.append(self.default_text)
 
@@ -441,24 +511,40 @@ class Ensembled_embedding(data.Dataset):
             texts = self.default_text
 
 
-        try:
-            image_path = self.image_data_ours[name]
-            sel_ind = random.choice(self.picked_rotation_degrees)
-            picked_image_addr = self.image_root + image_path[sel_ind] + '.npy'
-            image = np.load(picked_image_addr)
-
-            use_image = torch.tensor([1])
-
-        except:
-            image_path = self.image_data_ours['b1c821055c19413691ee708c3e2180a0']
-            sel_ind = random.choice(self.picked_rotation_degrees)
-            picked_image_addr = self.image_root + image_path[sel_ind] + '.npy'
-            image = np.load(picked_image_addr)
-            use_image = torch.tensor([0])
-
+        # 加载图像特征
+        if self.image_in_pc_file:
+            # 新格式：图像特征在点云文件中的 image_feat 字段
+            try:
+                if self.image_feat_key in openshape_data:
+                    image_feats = openshape_data[self.image_feat_key]  # [num_views, feat_dim]
+                    sel_ind = random.choice(range(min(self.num_views, len(image_feats))))
+                    image = image_feats[sel_ind]  # 选择一个视角
+                    use_image = torch.tensor([1])
+                else:
+                    # 如果没有图像特征，使用随机向量
+                    image = self.generate_random_image_feat()
+                    use_image = torch.tensor([0])
+            except Exception as e:
+                print(f"Error loading image feat for {name}: {e}")
+                image = self.generate_random_image_feat()
+                use_image = torch.tensor([0])
+        else:
+            # 原始格式：图像特征单独存放
+            try:
+                image_path = self.image_data_ours[name]
+                sel_ind = random.choice(self.picked_rotation_degrees)
+                picked_image_addr = self.image_root + image_path[sel_ind] + '.npy'
+                image = np.load(picked_image_addr)
+                use_image = torch.tensor([1])
+            except:
+                image_path = self.image_data_ours['b1c821055c19413691ee708c3e2180a0']
+                sel_ind = random.choice(self.picked_rotation_degrees)
+                picked_image_addr = self.image_root + image_path[sel_ind] + '.npy'
+                image = np.load(picked_image_addr)
+                use_image = torch.tensor([0])
 
         texts = torch.from_numpy(texts)
-        image = torch.from_numpy(image)
+        image = torch.from_numpy(image) if isinstance(image, np.ndarray) else image
         
         return name, name, use_image, texts, data, image, rgb
     
@@ -486,6 +572,40 @@ class Objaverse_lvis_openshape(data.Dataset):
         self.sample_points_num = self.npoints
         self.whole = config.get('whole')    # use both train and test data for pretraining
 
+        # ============ 图像和文本特征相关配置（参考 Ensembled_embedding） ============
+        self.text_source = getattr(config, 'text_source', ["text", "caption", "retrieval_text"])
+        self.rgb_random_drop_prob = getattr(config, 'rgb_random_drop_prob', 0.5)
+        
+        # 图像特征是否在点云文件中（新格式）
+        self.image_in_pc_file = getattr(config, 'IMAGE_IN_PC_FILE', True)  # 默认从点云文件中读取
+        self.image_feat_key = getattr(config, 'IMAGE_FEAT_KEY', 'image_feat')  # 图像特征字段名
+        self.num_views = getattr(config, 'NUM_VIEWS', 12)  # 视角数量
+        
+        # 如果图像不在点云文件中，则使用传统方式加载
+        if not self.image_in_pc_file:
+            self.image_root = getattr(config, 'IMAGE_PATH_ROOT', None)
+            image_data_path = getattr(config, 'IMAGE_PATH', None)
+            if image_data_path and os.path.exists(image_data_path):
+                with open(image_data_path, 'r') as f:
+                    self.image_data_ours = json.load(f)
+            else:
+                self.image_data_ours = None
+        else:
+            self.image_root = None
+            self.image_data_ours = None
+        
+        # GPT过滤文件（可选）
+        gpt_filter_path = getattr(config, 'GPT_FILTER', None)
+        if gpt_filter_path and os.path.exists(gpt_filter_path):
+            self.gpt4_filtering = json.load(open(gpt_filter_path, "r"))
+            self.use_text_filtering = True
+        else:
+            self.gpt4_filtering = {}
+            self.use_text_filtering = False
+        
+        # 生成默认随机文本特征
+        self.default_text = self.generate_random_text(1024)
+
         print_log(f'[DATASET] sample out {self.sample_points_num} points', logger='Objaverse')
         print_log(f'[DATASET] Open file {self.data_list_file}', logger='Objaverse')
         with open(self.data_list_file, 'r') as f:
@@ -494,11 +614,18 @@ class Objaverse_lvis_openshape(data.Dataset):
         self.file_list = []
         for line in lines:
             line = line.strip()
-            self.file_list.append({
+            point_path_relative = line.split(',')[3].replace('\n', '')
+            # 从 point_path 中提取分组数字（"-" 后面的前三位整数）
+            # point_path_relative 格式示例: "000-001/abc123/abc123.npz"
+            # split('-')[1][:3] 得到 "001"，即 "-" 后面的三位数字
+            group_id = point_path_relative.split('-')[1][:3]  # 提取 "001"
+            # 将根目录中的 xxx 替换为当前分组数字，再拼接相对路径
+            pc_root_with_group = self.pc_root.replace('xxx', group_id)
+            self.file_list.append({                         
                 'cate_id': line.split(',')[0],
                 'cate_name': line.split(',')[1],
                 'model_id': line.split(',')[2],
-                'point_path': self.pc_root + line.split(',')[3].replace('\n', '')
+                'point_path': pc_root_with_group + point_path_relative
             })
         print_log(f'[DATASET] {len(self.file_list)} instances were loaded', logger='Objaverse')
 
@@ -517,6 +644,19 @@ class Objaverse_lvis_openshape(data.Dataset):
             print("using augmented point clouds.")
 
         # self.template = "a point cloud model of {}."
+
+    def generate_random_text(self, embedding_dim=1024):
+        """生成随机文本特征向量（用于缺失文本特征的情况）"""
+        random_array = np.random.random(embedding_dim)
+        normalized_array = np.linalg.norm(random_array)
+        normalized_array = random_array / normalized_array
+        return normalized_array
+    
+    def generate_random_image_feat(self, embedding_dim=1024):
+        """生成随机图像特征向量（用于缺失图像特征的情况）"""
+        random_array = np.random.random(embedding_dim)
+        normalized_array = random_array / np.linalg.norm(random_array)
+        return normalized_array
 
     def pc_norm(self, pc):
         """ pc: NxC, return NxC """
@@ -537,21 +677,49 @@ class Objaverse_lvis_openshape(data.Dataset):
         return pc
 
     def __getitem__(self, idx):
+        """加载单个样本，支持数据损坏时自动加载下一条"""
+        max_attempts = 10  # 最多尝试加载 10 条不同的数据
+        original_idx = idx
+        
+        for attempt in range(max_attempts):
+            try:
+                return self._load_sample(idx)
+            except Exception as e:
+                print(f"[WARNING] Failed to load sample {idx}: {str(e)}. Trying next sample (attempt {attempt + 1}/{max_attempts})...")
+                # 尝试加载下一条数据，循环到数据集开头
+                idx = (idx + 1) % len(self.file_list)
+                # 如果绕回原点，说明尝试了很多次都失败
+                if idx == original_idx:
+                    break
+        
+        # 如果所有尝试都失败，返回 None（极端情况）
+        print(f"[ERROR] Failed to load any valid sample after {max_attempts} attempts starting from index {original_idx}")
+        return None
+    
+    def _load_sample(self, idx):
+        """实际加载样本的内部方法"""
         sample = self.file_list[idx]
 
         cate_id, cate_name, model_id, point_path = sample['cate_id'], sample['cate_name'], sample['model_id'], sample['point_path']
 
-        while True:
+        max_retries = 3  # 最大重试次数
+        for retry in range(max_retries):
             try:
                 openshape_data = np.load(point_path, allow_pickle=True).item()
                 data = openshape_data['xyz'].astype(np.float32)
                 rgb = openshape_data['rgb'].astype(np.float32)
-            except OSError as e:
-                print(f"Catched exception: {str(e)}. Re-trying…")
-                import time
-                time.sleep(1)
-            else:
                 break
+            except (OSError, IOError) as e:
+                # 临时性错误（如网络文件系统抖动），进行重试
+                if retry < max_retries - 1:
+                    print(f"Catched exception: {str(e)}. Re-trying ({retry + 1}/{max_retries})...")
+                    import time
+                    time.sleep(0.5)
+                else:
+                    raise RuntimeError(f"Failed to load {point_path} after {max_retries} retries: {e}")
+            except Exception as e:
+                # 永久性错误（如 pickle 损坏、数据格式错误），直接跳过不重试
+                raise RuntimeError(f"Corrupted data file {point_path}: {e}")
 
         if self.openshape_setting:
             data[:, [1, 2]] = data[:, [2, 1]]
@@ -576,9 +744,106 @@ class Objaverse_lvis_openshape(data.Dataset):
         else:
             data = torch.from_numpy(data).float()
 
+        # ============ 加载文本特征（参考 Ensembled_embedding） ============
+        texts = []
+        if 'text' in self.text_source:
+            if not (self.use_text_filtering and model_id in self.gpt4_filtering and self.gpt4_filtering[model_id].get("flag") == "N"):
+                try:
+                    if "text_feat" in openshape_data and len(openshape_data["text_feat"]) > 0:
+                        data_text = openshape_data["text_feat"][0]
+                        if not isinstance(data_text, str):
+                            if np.random.rand() < 0.5:
+                                texts.append(data_text['original'])
+                            else:
+                                texts.append(data_text['prompt_avg'])
+                except:
+                    texts.append(self.default_text)
+        
+        if 'caption' in self.text_source:
+            if np.random.rand() < 0.5:
+                if "blip_caption_feat" in openshape_data and len(openshape_data["blip_caption_feat"]) > 0:
+                    try:
+                        data_text = openshape_data["blip_caption_feat"]
+                        if not isinstance(data_text, str):
+                            if np.random.rand() < 0.5:
+                                texts.append(data_text['original'])
+                            else:
+                                texts.append(data_text['prompt_avg'])
+                    except:
+                        texts.append(self.default_text)
+            else:
+                if "msft_caption_feat" in openshape_data and len(openshape_data["msft_caption_feat"]) > 0:
+                    try:
+                        data_text = openshape_data["msft_caption_feat"]
+                        if not isinstance(data_text, str):
+                            if np.random.rand() < 0.5:
+                                texts.append(data_text['original'])
+                            else:
+                                texts.append(data_text['prompt_avg'])
+                    except:
+                        texts.append(self.default_text)
+        
+        if 'retrieval_text' in self.text_source:
+            if "retrieval_text_feat" in openshape_data and len(openshape_data.get("retrieval_text", [])) > 0:
+                idx_text = np.random.randint(len(openshape_data["retrieval_text"]))
+                try:
+                    data_text = openshape_data["retrieval_text_feat"][idx_text]
+                    if not isinstance(data_text, str):
+                        texts.append(data_text['original'])
+                except:
+                    texts.append(self.default_text)
+
+        if len(texts) > 0:
+            text_idx = np.random.randint(len(texts))
+            texts = texts[text_idx]
+        else:
+            texts = self.default_text
+
+        # ============ 加载图像特征（参考 Ensembled_embedding） ============
+        # print(f'image_in_pc_file: {self.image_in_pc_file}')
+        if self.image_in_pc_file:
+            # 新格式：图像特征在点云文件中的 image_feat 字段
+            try:
+                if self.image_feat_key in openshape_data:
+                    image_feats = openshape_data[self.image_feat_key]  # [num_views, feat_dim]
+                    sel_ind = random.choice(range(min(self.num_views, len(image_feats))))
+                    image = image_feats[sel_ind]  # 选择一个视角
+                    use_image = torch.tensor([1])
+                else:
+                    # 如果没有图像特征，使用随机向量
+                    image = self.generate_random_image_feat()
+                    use_image = torch.tensor([0])
+            except Exception as e:
+                print(f"Error loading image feat for {model_id}: {e}")
+                image = self.generate_random_image_feat()
+                use_image = torch.tensor([0])
+        else:
+            # 原始格式：图像特征单独存放
+            try:
+                if self.image_data_ours and model_id in self.image_data_ours:
+                    image_path = self.image_data_ours[model_id]
+                    sel_ind = random.choice(self.picked_rotation_degrees)
+                    picked_image_addr = self.image_root + image_path[sel_ind] + '.npy'
+                    image = np.load(picked_image_addr)
+                    use_image = torch.tensor([1])
+                else:
+                    image = self.generate_random_image_feat()
+                    use_image = torch.tensor([0])
+            except:
+                image = self.generate_random_image_feat()
+                use_image = torch.tensor([0])
+
+        # 转换为 tensor
+        texts = torch.from_numpy(texts) if isinstance(texts, np.ndarray) else torch.tensor(texts)
+        image = torch.from_numpy(image) if isinstance(image, np.ndarray) else image
+        rgb = torch.from_numpy(rgb).float() if isinstance(rgb, np.ndarray) else rgb
+
         cate_id = np.array([cate_id]).astype(np.int32)
-        # print(data.shape, cate_id, cate_name)
-        return data, cate_id, cate_name, rgb
+        
+        # 返回格式与 Ensembled_embedding 一致：
+        # (name, name, use_image, texts, data, image, rgb)
+        # 这里 name 用 model_id，同时也返回 cate_name 用于分类
+        return data, cate_id, cate_name, rgb, model_id, use_image, texts, image
 
     def __len__(self):
         return len(self.file_list)  
@@ -595,12 +860,22 @@ default_collate_err_msg_format = (
 np_str_obj_array_pattern = re.compile(r'[SaUO]')
 
 def customized_collate_fn(batch):
-    r"""Puts each data field into a tensor with outer dimension batch size"""
-
+    r"""Puts each data field into a tensor with outer dimension batch size
+    
+    支持自动过滤损坏的数据（返回 None 的样本）
+    """
+    # 过滤掉 None 值（损坏的数据）
+    if isinstance(batch, list):
+        batch = [example for example in batch if example is not None]
+        # 如果整个 batch 都是损坏数据，返回空
+        if len(batch) == 0:
+            return None
+    
     elem = batch[0]
     elem_type = type(elem)
 
-    if isinstance(batch, list):
+    # 额外检查：过滤掉 example[4] 为 None 的情况（点云数据为空）
+    if isinstance(batch, list) and isinstance(elem, (tuple, list)) and len(elem) > 4:
         batch = [example for example in batch if example[4] is not None]
 
     if isinstance(elem, torch.Tensor):
@@ -612,6 +887,7 @@ def customized_collate_fn(batch):
             storage = elem.storage()._new_shared(numel)
             # storage = elem.untyped_storage()._new_shared(numel)
             out = elem.new(storage)
+            out.resize_(0)
         # import pdb; pdb.set_trace()
         return torch.stack(batch, 0, out=out)
     elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \

@@ -1,8 +1,44 @@
+# Python cache
 **/__pycache__/*
+*.pyc
+
+# IDE & tools
+.vscode/*
 logs/*
 wandb/*
-*.pyc
+
+# Original Uni3D excluded dirs
 open_clip/*
 dsconfig/*
-.vscode/*
-dsconfig/*
+
+# Model weights (large binary files)
+checkpoints/
+clip_model/*.bin
+clip_model/merges.txt
+clip_model/vocab.json
+clip_model/tokenizer.json
+
+# Large training/test data
+data/gpt4_filter.json
+data/train_all_*.json
+data/train_no_lvis_*.json
+data/test_datasets/
+
+# Training output directories
+output_multimodal/
+output_two_stage/
+output_two_stage_v2/
+
+# Binary & compressed files
+*.pt
+*.gz
+
+# Misc
+elastic_error.json
+
+# Agent intermediate results (images, cache)
+ranking_agent/unified-embeddings/agent_skills_for_bcmk/llm_cache/
+ranking_agent/unified-embeddings/agent_skills_for_bcmk/llm_cache_/
+ranking_agent/unified-embeddings/agent_skills_for_bcmk/*.png
+ranking_agent/unified-embeddings/agent_skills_for_bcmk/raw_objects_group/*.json
+ranking_agent/unified-embeddings/agent_skills_for_bcmk/image_ranking_result*.json

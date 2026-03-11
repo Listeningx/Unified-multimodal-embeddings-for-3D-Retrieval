@@ -1,16 +1,64 @@
 import torch
 import torch.nn as nn
-from pointnet2_ops import pointnet2_utils
+# 移除 pointnet2_ops 依赖，使用纯 PyTorch 实现
+# from pointnet2_ops import pointnet2_utils
 
 import logging
+
+# ============ 纯 PyTorch 实现的 pointnet2 核心函数 ============
+
+def furthest_point_sample(xyz, npoint):
+    """
+    最远点采样 (Farthest Point Sampling) 的纯 PyTorch 实现
+    Input:
+        xyz: 点云数据, [B, N, 3]
+        npoint: 采样点数量
+    Return:
+        centroids: 采样点索引, [B, npoint]
+    """
+    device = xyz.device
+    B, N, C = xyz.shape
+    centroids = torch.zeros(B, npoint, dtype=torch.long, device=device)
+    distance = torch.ones(B, N, device=device) * 1e10
+    farthest = torch.randint(0, N, (B,), dtype=torch.long, device=device)
+    batch_indices = torch.arange(B, dtype=torch.long, device=device)
+    
+    for i in range(npoint):
+        centroids[:, i] = farthest
+        centroid = xyz[batch_indices, farthest, :].view(B, 1, 3)
+        dist = torch.sum((xyz - centroid) ** 2, -1)
+        distance = torch.min(distance, dist)
+        farthest = torch.max(distance, -1)[1]
+    
+    return centroids
+
+
+def gather_operation(features, idx):
+    """
+    根据索引收集点特征的纯 PyTorch 实现
+    Input:
+        features: 点特征, [B, C, N]
+        idx: 采样索引, [B, npoint]
+    Return:
+        new_features: 采样后的特征, [B, C, npoint]
+    """
+    B, C, N = features.shape
+    _, npoint = idx.shape
+    
+    idx_expanded = idx.unsqueeze(1).expand(-1, C, -1)  # [B, C, npoint]
+    new_features = torch.gather(features, 2, idx_expanded)  # [B, C, npoint]
+    
+    return new_features
+
+# ============ 以上为纯 PyTorch 实现 ============
 
 def fps(data, number):
     '''
         data B N 3
         number int
     '''
-    fps_idx = pointnet2_utils.furthest_point_sample(data, number) 
-    fps_data = pointnet2_utils.gather_operation(data.transpose(1, 2).contiguous(), fps_idx).transpose(1,2).contiguous()
+    fps_idx = furthest_point_sample(data, number) 
+    fps_data = gather_operation(data.transpose(1, 2).contiguous(), fps_idx).transpose(1,2).contiguous()
     return fps_data
 
 # https://github.com/Strawberry-Eat-Mango/PCT_Pytorch/blob/main/util.py 
@@ -162,14 +210,16 @@ class PointcloudEncoder(nn.Module):
     def __init__(self, point_transformer, args):
         super().__init__()
         from easydict import EasyDict
-        self.trans_dim = args.pc_feat_dim # 768
-        self.embed_dim = args.embed_dim # 512
-        self.group_size = args.group_size # 32
-        self.num_group = args.num_group # 512
+        self.trans_dim = args.pc_feat_dim # 
+        # self.embed_dim = args.embed_dim # 
+        self.embed_dim = 1024#follow 预训练模型的维度
+
+        self.group_size = args.group_size # 
+        self.num_group = args.num_group # 
         # grouper
         self.group_divider = Group(num_group = self.num_group, group_size = self.group_size)
         # define the encoder
-        self.encoder_dim =  args.pc_encoder_dim # 256
+        self.encoder_dim =  args.pc_encoder_dim # 
         self.encoder = Encoder(encoder_channel = self.encoder_dim)
        
         # bridge encoder and transformer

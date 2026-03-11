@@ -23,14 +23,39 @@ def get_world_size():
     return torch.distributed.get_world_size()
 
 def is_global_master(args):
-    return args.rank == 0
+    """检查是否是全局主进程"""
+    if hasattr(args, 'rank'):
+        return args.rank == 0
+    # 从环境变量获取
+    rank = int(os.environ.get('RANK', 0))
+    return rank == 0
 
 
 def is_local_master(args):
-    return args.local_rank == 0
+    """检查是否是本地主进程"""
+    if hasattr(args, 'local_rank'):
+        return args.local_rank == 0
+    # 从环境变量获取
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    return local_rank == 0
 
 
 def is_master(args, local=False):
+    """检查是否是主进程
+    
+    Args:
+        args: 参数对象，需包含 rank 和 local_rank 属性
+        local: 是否检查本地主进程，默认检查全局主进程
+    
+    Returns:
+        bool: 是否是主进程
+    """
+    # 处理 args 为 None 的情况
+    if args is None:
+        if local:
+            return int(os.environ.get('LOCAL_RANK', 0)) == 0
+        return int(os.environ.get('RANK', 0)) == 0
+    
     return is_local_master(args) if local else is_global_master(args)
 
 
@@ -210,6 +235,23 @@ def create_deepspeed_config(args):
 
         if args.grad_clip_norm is not None:
             ds_config.update({'gradient_clipping': args.grad_clip_norm})
+
+        # 添加学习率调度器（WarmupDecayLR：cosine decay with warmup）
+        # 注意：total_num_steps 需要在实际训练时动态计算，这里使用占位值
+        # DeepSpeed 会根据配置自动管理学习率
+        total_num_steps = getattr(args, 'total_steps', 100000)  # 占位值，实际值在训练代码中设置
+        scheduler_config = {
+            "scheduler": {
+                "type": "WarmupDecayLR",
+                "params": {
+                    "warmup_min_lr": 0,
+                    "warmup_max_lr": args.lr,
+                    "warmup_num_steps": args.warmup,
+                    "total_num_steps": total_num_steps
+                }
+            }
+        }
+        ds_config.update(scheduler_config)
 
         if args.zero_stage == 1:
             ds_config.update(
