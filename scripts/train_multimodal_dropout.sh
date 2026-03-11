@@ -58,12 +58,12 @@ model=create_uni3d
 # clip_model="EVA02-E-14-plus"
 # clip_model='hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k'
 clip_model='ViT-bigG-14'
-pretrained="/apdcephfs/share_303565425/DCC3/serenasnliu/GAR/Uni3D/clip_model/open_clip_pytorch_model.bin"  # 或 "laion2b_s9b_b144k"
+pretrained="Uni3D/clip_model/open_clip_pytorch_model.bin"  # 或 "laion2b_s9b_b144k"
 embed_dim=1280
 
 # 点云模型配置
 pc_model="eva_giant_patch14_560.m30m_ft_in22k_in1k"
-pretrained_pc="/apdcephfs/share_303565425/DCC3/serenasnliu/GAR/Uni3D/checkpoints/model.pt"
+pretrained_pc="Uni3D/checkpoints/model.pt"
 pc_feat_dim=1408
 pc_encoder_dim=512
 
@@ -480,4 +480,3 @@ esac
 echo "==========================================="
 echo "Training Completed!"
 echo "==========================================="
-python /cfs_160T/serenasnliu/scripts/lowmem_highytil.py

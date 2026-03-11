@@ -3,7 +3,7 @@
 # i, v, t 三种模态的所有组合（单模态、双模态、三模态）
 MODALS=("i" "v" "t" "iv" "it" "vt" "ivt")
 
-OUTPUT_DIR=/apdcephfs/share_303565425/DCC3/serenasnliu/all3d_test_result/objaverse/multimodal
+OUTPUT_DIR=objaverse/multimodal
 
 for QUERY_MODAL in "${MODALS[@]}"; do
     for GALLERY_MODAL in "${MODALS[@]}"; do
@@ -20,13 +20,13 @@ for QUERY_MODAL in "${MODALS[@]}"; do
 
         CUDA_VISIBLE_DEVICES=3 \
         python eval_retrieval_uni3d.py \
-            --json_dir /apdcephfs/share_303565425/DCC3/serenasnliu/GAR/Uni3D/data/test_datasets/objaverse/eval_input_qwen3.5max \
+            --json_dir eval_input_qwen3.5max \
             --dataset objaverse \
             --query_modal ${QUERY_MODAL} --gallery_modal ${GALLERY_MODAL} \
             --output_dir ${OUTPUT_DIR} \
-            --checkpoint /apdcephfs/share_303565425/DCC3/serenasnliu/GAR/Uni3D/output_multimodal/20260130_163844/checkpoints/epoch_21/mp_rank_00_model_states.pt \
+            --checkpoint mp_rank_00_model_states.pt \
             --model_type multimodal \
-            --pc_cache_dir /apdcephfs/share_303565425/DCC3/serenasnliu/GAR/Uni3D/data/test_datasets/objaverse/pointcloud_cache \
+            --pc_cache_dir objaverse/pointcloud_cache \
             --batch_size 32
 
         if [ $? -ne 0 ]; then

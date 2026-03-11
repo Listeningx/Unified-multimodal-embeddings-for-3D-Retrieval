@@ -25,9 +25,8 @@ data/train_no_lvis_*.json
 data/test_datasets/
 
 # Training output directories
-output_multimodal/
-output_two_stage/
-output_two_stage_v2/
+# output_multimodal/
+
 
 # Binary & compressed files
 *.pt

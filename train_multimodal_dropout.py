@@ -1006,7 +1006,6 @@ def save_checkpoint(model, optimizer, scheduler, scaler, epoch, args, is_best=Tr
         os.makedirs(deepspeed_checkpoint_path, exist_ok=True)
         client_state = {
             'epoch': epoch,
-            'best_acc1': best_acc1,
             'args': vars(args),
         }
         model.save_checkpoint(
@@ -1014,13 +1013,7 @@ def save_checkpoint(model, optimizer, scheduler, scaler, epoch, args, is_best=Tr
             tag=f"epoch_{epoch}", 
             client_state=client_state
         )
-        if is_best:
-            model.save_checkpoint(
-                save_dir=deepspeed_checkpoint_path, 
-                tag="best", 
-                client_state=client_state,
-                save_latest=False  # 防止 best 覆盖 latest 指向，确保 latest 始终指向最新 epoch
-            )
+       
     else:
         # 普通检查点保存
         # 获取底层模型状态
@@ -1028,7 +1021,7 @@ def save_checkpoint(model, optimizer, scheduler, scaler, epoch, args, is_best=Tr
         
         checkpoint = {
             'epoch': epoch,
-            'best_acc1': best_acc1,
+    
             'model_state_dict': model_state,
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict() if scheduler and hasattr(scheduler, 'state_dict') else None,
@@ -1044,11 +1037,7 @@ def save_checkpoint(model, optimizer, scheduler, scaler, epoch, args, is_best=Tr
         if epoch % args.save_interval == 0:
             checkpoint_path = os.path.join(args.output_dir, f'checkpoint_epoch_{epoch}.pth')
             torch.save(checkpoint, checkpoint_path)
-        
-        # 保存最佳模型
-        if is_best:
-            best_path = os.path.join(args.output_dir, 'checkpoint_best.pth')
-            torch.save(checkpoint, best_path)
+
 
 
 # ============ 主函数 ============
@@ -1599,7 +1588,8 @@ def main():
     
     # ============ 恢复训练 ============
     start_epoch = 0
-    best_acc1 = 0.0  # 使用 acc1 作为最佳标准（与 main.py 一致）
+
+
     
     if args.resume is not None:
         if args.enable_deepspeed:
@@ -1615,9 +1605,8 @@ def main():
                 if latest_ckpt >= 0:
                     start_epoch = latest_ckpt + 1  # 从下一个 epoch 开始训练
                     _, client_states = model.load_checkpoint(args.resume, tag=f'epoch_{latest_ckpt}')
-                    if client_states and 'best_acc1' in client_states:
-                        best_acc1 = client_states['best_acc1']
-                    logger.info(f"=> resuming DeepSpeed checkpoint '{args.resume}' (epoch {latest_ckpt}, next epoch: {start_epoch}, best_acc1: {best_acc1:.2f})")
+                  
+                    logger.info(f"=> resuming DeepSpeed checkpoint '{args.resume}' (epoch {latest_ckpt}, next epoch: {start_epoch})")
                 else:
                     logger.info(f"=> no checkpoint found at '{args.resume}'")
         else:
@@ -1625,7 +1614,7 @@ def main():
             if os.path.isfile(args.resume):
                 checkpoint = torch.load(args.resume, map_location='cpu')
                 start_epoch = checkpoint.get('epoch', 0) + 1  # 从下一个 epoch 开始
-                best_acc1 = checkpoint.get('best_acc1', 0.0)
+               
                 model.load_state_dict(checkpoint['model_state_dict'])
                 if optimizer is not None and 'optimizer_state_dict' in checkpoint:
                     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -1635,60 +1624,11 @@ def main():
                     # 注意：warmup_cosine_lr 返回的是函数，不是对象，无法恢复状态
                     # 如果需要精确恢复学习率，需要重新计算到当前 step
                     pass
-                logger.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch}, best_acc1 {best_acc1:.2f}%)")
+                logger.info(f"=> resuming checkpoint '{args.resume}' (epoch {start_epoch})")
             else:
                 logger.warning(f"=> no checkpoint found at '{args.resume}'")
     
-    # ============ 训练前先执行一次测试（用于和后续训练结果比较）============
-    if is_master(args):
-        print(f"\n{'#'*70}")
-        print(f"#{'':^68}#")
-        print(f"#{'🔍 INITIAL VALIDATION (Before Training)':^68}#")
-        print(f"#{'':^68}#")
-        print(f"{'#'*70}\n")
-        logger.info("=> Running initial validation before training starts...")
     
-    # 临时加载 CLIP 模型进行初始验证
-    if args.use_embed:
-        logger.info("=> loading CLIP model for initial validation...")
-        clip_model_for_init_val, _, _ = open_clip.create_model_and_transforms(
-            model_name=args.clip_model, 
-            pretrained=args.pretrained
-        )
-        clip_model_for_init_val.to(device)
-        clip_model_for_init_val.eval()
-        for param in clip_model_for_init_val.parameters():
-            param.requires_grad = False
-    else:
-        clip_model_for_init_val = clip_model
-    
-    with amp.autocast(enabled=not args.disable_amp):
-        # ModelNet40 初始验证
-        init_val_stats = test_zeroshot_3d_core(
-            val_loader, args.validate_dataset_name, model, clip_model_for_init_val, tokenizer, args, "modelnet"
-        )
-        logging.info(f"Initial ModelNet40: {init_val_stats}")
-        
-        # ScanObjNN 初始验证
-        init_val_scanobjnn_stats = test_zeroshot_3d_core(
-            val_scanobjnn_loader, args.validate_dataset_name_scanobjnn, model, clip_model_for_init_val, tokenizer, args, "scanobjnn"
-        )
-        logging.info(f"Initial ScanObjNN: {init_val_scanobjnn_stats}")
-    
-    # 释放临时加载的 CLIP 模型
-    if args.use_embed:
-        del clip_model_for_init_val
-        torch.cuda.empty_cache()
-        logger.info("=> CLIP model released after initial validation")
-    
-    if is_master(args):
-        print(f"\n{'─'*70}")
-        print(f"📊 INITIAL VALIDATION RESULTS (Epoch -1, Before Training)")
-        print(f"   📊 ModelNet40 - Acc@1: {init_val_stats['acc1']:.2f}% | Acc@3: {init_val_stats['acc3']:.2f}% | Acc@5: {init_val_stats['acc5']:.2f}%")
-        print(f"   📊 ScanObjNN  - Acc@1: {init_val_scanobjnn_stats['acc1']:.2f}% | Acc@3: {init_val_scanobjnn_stats['acc3']:.2f}% | Acc@5: {init_val_scanobjnn_stats['acc5']:.2f}%")
-        print(f"{'─'*70}\n")
-        logger.info(f"Initial validation completed. ModelNet40 Acc@1: {init_val_stats['acc1']:.2f}%, ScanObjNN Acc@1: {init_val_scanobjnn_stats['acc1']:.2f}%")
-        
      # 初始化 TensorBoard（仅主进程）
     writer = None
     if args.tensorboard and TENSORBOARD_AVAILABLE and is_master(args):
@@ -1698,19 +1638,10 @@ def main():
         logger.info(f"TensorBoard logging enabled at: {tensorboard_dir}")
         logger.info(f"View with: tensorboard --logdir={tensorboard_dir} --port=6006")
 
-    # 记录初始验证结果到 TensorBoard
-    if writer is not None:
-        writer.add_scalar('val_modelnet40/acc1', init_val_stats['acc1'], -1)  # epoch = -1 表示初始状态
-        writer.add_scalar('val_modelnet40/acc3', init_val_stats['acc3'], -1)
-        writer.add_scalar('val_modelnet40/acc5', init_val_stats['acc5'], -1)
-        writer.add_scalar('val_scanobjnn/acc1', init_val_scanobjnn_stats['acc1'], -1)
-        writer.add_scalar('val_scanobjnn/acc3', init_val_scanobjnn_stats['acc3'], -1)
-        writer.add_scalar('val_scanobjnn/acc5', init_val_scanobjnn_stats['acc5'], -1)
-        writer.flush()
     
     # ============ 训练循环 ============
     logger.info("Starting training...")
-    best_epoch = -1
+
     
 
     for epoch in range(start_epoch, args.epochs):
@@ -1789,82 +1720,9 @@ def main():
         elif is_master(args):
             save_checkpoint(model, optimizer, scheduler, scaler, epoch, args)
         
-        if is_master(args):
-            logger.info(f"=> Checkpoint saved successfully. Now starting validation...")
-
-        # 验证（与 main.py 保持一致：对三个验证集进行零样本分类测试）
-        # ============ 验证时临时加载 CLIP 模型（节省训练时显存）============
-        if args.use_embed:
-            # 训练时未加载 CLIP，验证时临时加载
-            logger.info("=> loading CLIP model for validation...")
-            clip_model_for_val, _, _ = open_clip.create_model_and_transforms(
-                model_name=args.clip_model, 
-                pretrained=args.pretrained
-            )
-            clip_model_for_val.to(device)
-            clip_model_for_val.eval()
-            for param in clip_model_for_val.parameters():
-                param.requires_grad = False
-        else:
-            clip_model_for_val = clip_model
-        
-        with amp.autocast(enabled=not args.disable_amp):
-            # ModelNet40 验证
-            val_stats = test_zeroshot_3d_core(
-                val_loader, args.validate_dataset_name, model, clip_model_for_val, tokenizer, args, "modelnet"
-            )
-            logging.info(f"ModelNet40: {val_stats}")
-            
-            # LVIS 验证
-            # val_lvis_stats = test_zeroshot_3d_core(
-            #     val_lvis_loader, args.validate_dataset_name_lvis, model, clip_model_for_val, tokenizer, args, "lvis"
-            # )
-            # logging.info(f"LVIS: {val_lvis_stats}")
-            
-            # ScanObjNN 验证
-            val_scanobjnn_stats = test_zeroshot_3d_core(
-                val_scanobjnn_loader, args.validate_dataset_name_scanobjnn, model, clip_model_for_val, tokenizer, args, "scanobjnn"
-            )
-            logging.info(f"ScanObjNN: {val_scanobjnn_stats}")
-            
-            # 使用 LVIS 的 acc1 作为最佳模型选择标准（与 main.py 一致）
-            acc1 = val_scanobjnn_stats["acc1"]
-        
-        # ============ 验证完成后释放 CLIP 模型显存 ============
-        if args.use_embed:
-            del clip_model_for_val
-            torch.cuda.empty_cache()
-            logger.info("=> CLIP model released to free GPU memory")
-        
-        if is_master(args):
-            # 验证结果的醒目输出
-            print(f"\n{'~'*70}")
-            print(f"🎯 EPOCH {epoch} VALIDATION RESULTS")
-            print(f"   📊 ModelNet40 - Acc@1: {val_stats['acc1']:.2f}% | Acc@3: {val_stats['acc3']:.2f}% | Acc@5: {val_stats['acc5']:.2f}%")
-            print(f"   📊 ScanObjNN  - Acc@1: {val_scanobjnn_stats['acc1']:.2f}% | Acc@3: {val_scanobjnn_stats['acc3']:.2f}% | Acc@5: {val_scanobjnn_stats['acc5']:.2f}%")
-            print(f"   🏆 Best Acc@1: {max(best_acc1, acc1):.2f}%")
-            print(f"{'~'*70}\n")
-            
-            logger.info(
-                f"Epoch {epoch} Validation - "
-                f"ModelNet40 Acc@1: {val_stats['acc1']:.2f}% "
-                # f"LVIS Acc@1: {val_lvis_stats['acc1']:.2f}% "
-                f"ScanObjNN Acc@1: {val_scanobjnn_stats['acc1']:.2f}%"
-            )
-        
-        # 保存最佳模型（验证后单独保存最佳检查点）
-        is_best = acc1 > best_acc1
-        if is_best:
-            best_acc1 = acc1
-            best_epoch = epoch
-            # 单独保存最佳模型
-            if is_master(args):
-                logger.info(f"=> New best model! Acc@1: {best_acc1:.2f}% at epoch {best_epoch}")
-            if args.enable_deepspeed:
-                save_checkpoint(model, optimizer, scheduler, scaler, epoch, args, is_best=True, best_acc1=best_acc1)
-            elif is_master(args):
-                save_checkpoint(model, optimizer, scheduler, scaler, epoch, args, is_best=True, best_acc1=best_acc1)
-        
+       
+  
+     
 
     
         # 记录日志（与 main.py 格式一致）
@@ -1874,8 +1732,7 @@ def main():
             # **{f'test_lvis_{k}': v for k, v in val_lvis_stats.items()},
             **{f'test_scanobjnn_{k}': v for k, v in val_scanobjnn_stats.items()},
             'epoch': epoch,
-            'best_acc1': best_acc1,
-            'best_epoch': best_epoch
+          
         }
         
         if is_master(args):
@@ -1892,24 +1749,7 @@ def main():
             writer.add_scalar('train/lr', train_stats['lr'], epoch)
             writer.add_scalar('train/logit_scale', train_stats['logit_scale'], epoch)
             
-            # ModelNet40 验证指标
-            writer.add_scalar('val_modelnet40/acc1', val_stats['acc1'], epoch)
-            writer.add_scalar('val_modelnet40/acc3', val_stats['acc3'], epoch)
-            writer.add_scalar('val_modelnet40/acc5', val_stats['acc5'], epoch)
-            
-            # LVIS 验证指标
-            # writer.add_scalar('val_lvis/acc1', val_lvis_stats['acc1'], epoch)
-            # writer.add_scalar('val_lvis/acc3', val_lvis_stats['acc3'], epoch)
-            # writer.add_scalar('val_lvis/acc5', val_lvis_stats['acc5'], epoch)
-            
-            # ScanObjNN 验证指标
-            writer.add_scalar('val_scanobjnn/acc1', val_scanobjnn_stats['acc1'], epoch)
-            writer.add_scalar('val_scanobjnn/acc3', val_scanobjnn_stats['acc3'], epoch)
-            writer.add_scalar('val_scanobjnn/acc5', val_scanobjnn_stats['acc5'], epoch)
-            
-            # 最佳准确率
-            writer.add_scalar('best/acc1', best_acc1, epoch)
-            writer.add_scalar('best/epoch', best_epoch, epoch)
+        
             
             writer.flush()  # 确保数据写入磁盘
     
@@ -1920,7 +1760,8 @@ def main():
     
     if is_master(args):
         logger.info("Training completed!")
-        logger.info(f"Best LVIS Acc@1: {best_acc1:.2f}% at epoch {best_epoch}")
+  
+  
 
 
 if __name__ == '__main__':
