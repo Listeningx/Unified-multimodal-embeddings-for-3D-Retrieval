@@ -42,3 +42,6 @@ ranking_agent/unified-embeddings/agent_skills_for_bcmk/llm_cache_/
 ranking_agent/unified-embeddings/agent_skills_for_bcmk/*.png
 ranking_agent/unified-embeddings/agent_skills_for_bcmk/raw_objects_group/*.json
 ranking_agent/unified-embeddings/agent_skills_for_bcmk/image_ranking_result*.json
+data/gpt4_filter.json
+data/train_no_lvis_uni3d.json
+data/train_all_uni3d.json
