@@ -19,17 +19,18 @@ clip_model/vocab.json
 clip_model/tokenizer.json
 
 # Large training/test data
-data/gpt4_filter.json
-data/train_all_*.json
-data/train_no_lvis_*.json
+# data/gpt4_filter.json
+# data/train_all_*.json
+# data/train_no_lvis_*.json
 data/test_datasets/
 
 # Training output directories
 # output_multimodal/
+*/tensorboard/*
 
 
 # Binary & compressed files
-*.pt
+# *.pt
 *.gz
 
 # Misc
