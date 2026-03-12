@@ -45,3 +45,5 @@ ranking_agent/unified-embeddings/agent_skills_for_bcmk/image_ranking_result*.jso
 data/gpt4_filter.json
 data/train_no_lvis_uni3d.json
 data/train_all_uni3d.json
+
+upload_checkpoints_to_hf.py
