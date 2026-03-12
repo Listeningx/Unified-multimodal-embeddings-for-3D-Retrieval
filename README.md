@@ -3,17 +3,20 @@
 本项目从Uni3d项目代码改编而来。将文本、图像、点云三种模态的资产表示联合起来编码embedding，用于高质量资产检索。另外我们提供了专注类内检索排序质量的基准测试以及构建代码。复现需要先安装pointnet2，https://github.com/baaivision/Uni3D
 
 # pretrained model
-open_clip:,位置：./clip_model/...
+open_clip:
+位置：./clip_model/...
 型号：OpenCLIP (ViT-bigG-14, laion2b_s39b_b160k).
 https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k/tree/main
 
-uni3d:https://huggingface.co/BAAI/Uni3D/blob/main/modelzoo/uni3d-g/model.pt,位置：./checkpoints/model.pt
+uni3d:
+位置：./checkpoints/model.pt
+https://huggingface.co/BAAI/Uni3D/blob/main/modelzoo/uni3d-g/model.pt
 
 checkpoints:
 https://huggingface.co/Listeningx/remu3d-checkpoints
 
 # train
-运行脚本有train_multimodal_dropout.sh（随即丢弃模态）和train_multimodal.sh（全模态）
+运行脚本有train_multimodal_dropout.sh（随机丢弃模态）和train_multimodal.sh（全模态）
 ```bash
 # ============ 训练模式选择 ============
 # 可选值: "single" (单机单卡), "multi" (单机多卡 DDP), "deepspeed" (DeepSpeed 多卡)
@@ -53,6 +56,7 @@ https://huggingface.co/Listeningx/remu3d-checkpoints
 # 训练数据
 数据集：ensembled_embedding，由openshape工作整理发布https://github.com/Colin97/OpenShape_code
 https://huggingface.co/datasets/OpenShape/openshape-training-data/tree/main
+
 索引文件：
 | 索引文件 | 路径 | 样本数 | 使用条件 |
 |----------|------|--------|----------|
