@@ -15,7 +15,8 @@ from huggingface_hub import HfApi, create_repo
 # ========== 配置项 ==========
 # 填写你的 Hugging Face Access Token（Write 权限）
 # 获取地址: https://huggingface.co/settings/tokens
-HF_TOKEN = "REMOVED_SECRET"
+# 请通过环境变量设置: export HF_TOKEN="your_token_here"
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 # 修改为你的 Hugging Face 用户名/仓库名
 REPO_ID = "Listeningx/remu3d-checkpoints"
